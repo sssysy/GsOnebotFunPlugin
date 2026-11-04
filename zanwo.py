@@ -1,4 +1,5 @@
 import asyncio
+import random
 
 from gsuid_core.sv import SV
 from gsuid_core.bot import Bot
@@ -9,6 +10,14 @@ sv = SV("赞我", pm=6, area="ALL")
 _TIMES_PER_CALL = 10  # send_like 单次最多 10 个，SVIP 日上限 50 要调用 5 次
 _CALLS = 5
 _CALL_GAP = 0.5
+_SUCCESS_MESSAGES = (
+    "赞完啦～今天的你也闪闪发光✨",
+    "点赞小分队出动完毕，请查收这份心意～",
+    "咔咔咔，赞已经送到，记得开心呀！",
+    "任务完成！愿好运和点赞一起奔向你～",
+    "赞已经安排上啦，今天也要元气满满哦！",
+    "叮咚～点赞已送达，请签收这份小小的心意！",
+)
 
 
 @sv.on_fullmatch(
@@ -26,14 +35,20 @@ Args:
     aliases=["GsOnebotFunPlugin·赞我"],
 )
 async def zan_wo(bot: Bot, ev: Event) -> None:
-    from plugins.OneBotUID.api import call_bot_api
+    from plugins.OneBotUID.api import OneBotApiError, call_bot_api
 
     user_id = int(ev.user_id)
-    for _ in range(_CALLS):
-        await call_bot_api(
-            "send_like",
-            {"user_id": user_id, "times": _TIMES_PER_CALL},
-            self_id=ev.bot_self_id,
-        )
-        await asyncio.sleep(_CALL_GAP)
-    await bot.send(f"已赞 {_TIMES_PER_CALL * _CALLS} 次")
+    for index in range(_CALLS):
+        try:
+            await call_bot_api(
+                "send_like",
+                {"user_id": user_id, "times": _TIMES_PER_CALL},
+                self_id=ev.bot_self_id,
+            )
+        except OneBotApiError:
+            if index == 0:
+                raise
+            break
+        if index < _CALLS - 1:
+            await asyncio.sleep(_CALL_GAP)
+    await bot.send(random.choice(_SUCCESS_MESSAGES))
