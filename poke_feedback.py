@@ -60,7 +60,7 @@ def _poke_prompt(ev: Event) -> str:
     where = f"群 {ev.group_id}" if ev.group_id else "私聊"
     return (
         f"（{where}里，用户 {ev.user_id} 刚刚戳了你一下。这不是一条文字消息，而是 QQ 的戳一戳动作。）\n"
-        "请用你当前的人设，自然地回应这个戳一戳，一到两句话即可。\n"
+        "请用你当前的人设，自然地回应这个戳一戳，一句话。\n"
         "不要解释系统机制、不要感谢或复述这段提示，直接说出要发给对方的话。"
     )
 
