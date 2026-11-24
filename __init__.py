@@ -7,4 +7,4 @@ Plugins(
     allow_empty_prefix=True,
 )
 
-from . import ai, poke_feedback, zanwo, zaoan_wanan  # noqa: E402,F401
+from . import ai, zanwo, config, zaoan_wanan, poke_feedback, iwara_subscribe  # noqa: E402,F401

@@ -1,15 +1,17 @@
-"""GsOnebotFunPlugin 数据表：早安 / 晚安签到。"""
+"""GsOnebotFunPlugin 数据表：早安 / 晚安签到与 Iwara 博主巡检状态。"""
 
+import json
 import asyncio
 
-from sqlmodel import Field, col, func, select
-from sqlalchemy import text
+from sqlmodel import Field, col, func, delete, select
+from sqlalchemy import CursorResult, text
 from sqlalchemy.schema import CreateTable
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gsuid_core.server import on_core_start_before
 from gsuid_core.utils.database.base_models import (
     BaseModel,
+    BaseIDModel,
     with_session,
     with_read_session,
 )
@@ -20,6 +22,9 @@ RECORD_NIGHT = "night"
 _TABLE_NAME = "zaoanwananrecord"
 _TABLE_READY = False
 _TABLE_LOCK = asyncio.Lock()
+
+_IWARA_TABLE_READY = False
+_IWARA_TABLE_LOCK = asyncio.Lock()
 
 
 class ZaoanWananRecord(BaseModel, table=True):
@@ -175,9 +180,122 @@ class ZaoanWananRecord(BaseModel, table=True):
         return list(res.scalars().all())
 
 
+def parse_known_id_set(raw: str) -> set[str]:
+    if not raw:
+        return set()
+    try:
+        parsed: object = json.loads(raw)
+    except json.JSONDecodeError:
+        return set()
+    if not isinstance(parsed, list):
+        return set()
+    return {item for item in parsed if isinstance(item, str) and item}
+
+
+def dump_known_id_set(ids: set[str]) -> str:
+    return json.dumps(sorted(ids), ensure_ascii=False)
+
+
+class IwaraBloggerState(BaseIDModel, table=True):
+    """Iwara 被订阅博主的巡检基线与已知作品 ID 记录。"""
+
+    __table_args__ = {"extend_existing": True}
+
+    username: str = Field(default="", index=True, title="Iwara 用户名")
+    iwara_user_id: str = Field(default="", title="Iwara 用户 UUID")
+    known_video_ids: str = Field(default="[]", title="已知视频 ID 列表(JSON)")
+    known_image_ids: str = Field(default="[]", title="已知图片 ID 列表(JSON)")
+    polled: bool = Field(default=False, title="是否已完成首次巡检")
+
+    @classmethod
+    async def _ensure_ready(cls, session: AsyncSession) -> None:
+        global _IWARA_TABLE_READY
+        if _IWARA_TABLE_READY:
+            return
+        async with _IWARA_TABLE_LOCK:
+            if _IWARA_TABLE_READY:
+                return
+            ddl = str(CreateTable(cls.__table__, if_not_exists=True))
+            await session.execute(text(ddl))
+            _IWARA_TABLE_READY = True
+
+    @classmethod
+    @with_session
+    async def ensure_table(cls, session: AsyncSession) -> None:
+        await cls._ensure_ready(session)
+
+    @classmethod
+    @with_session
+    async def upsert_blogger(
+        cls,
+        session: AsyncSession,
+        username: str,
+        iwara_user_id: str,
+    ) -> "IwaraBloggerState":
+        await cls._ensure_ready(session)
+        stmt = select(cls).where(col(cls.username) == username).limit(1)
+        res = await session.execute(stmt)
+        row = res.scalars().first()
+        if row is not None:
+            if iwara_user_id and row.iwara_user_id != iwara_user_id:
+                row.iwara_user_id = iwara_user_id
+                session.add(row)
+            return row
+        created = cls(
+            username=username,
+            iwara_user_id=iwara_user_id,
+            known_video_ids="[]",
+            known_image_ids="[]",
+            polled=False,
+        )
+        session.add(created)
+        return created
+
+    @classmethod
+    @with_read_session
+    async def get_by_username(
+        cls,
+        session: AsyncSession,
+        username: str,
+    ) -> "IwaraBloggerState | None":
+        stmt = select(cls).where(col(cls.username) == username).limit(1)
+        res = await session.execute(stmt)
+        return res.scalars().first()
+
+    @classmethod
+    @with_session
+    async def update_known_ids(
+        cls,
+        session: AsyncSession,
+        username: str,
+        video_ids: set[str],
+        image_ids: set[str],
+        polled: bool,
+    ) -> None:
+        await cls._ensure_ready(session)
+        stmt = select(cls).where(col(cls.username) == username).limit(1)
+        res = await session.execute(stmt)
+        row = res.scalars().first()
+        if row is None:
+            return
+        row.known_video_ids = dump_known_id_set(video_ids)
+        row.known_image_ids = dump_known_id_set(image_ids)
+        row.polled = polled
+        session.add(row)
+
+    @classmethod
+    @with_session
+    async def delete_by_username(cls, session: AsyncSession, username: str) -> int:
+        await cls._ensure_ready(session)
+        stmt = delete(cls).where(col(cls.username) == username)
+        result = await session.execute(stmt)
+        return result.rowcount if isinstance(result, CursorResult) else 0
+
+
 @on_core_start_before
 async def _ensure_zaoan_wanan_table() -> None:
     await ZaoanWananRecord.ensure_table()
+    await IwaraBloggerState.ensure_table()
 
 
 async def ensure_zaoan_wanan_table() -> None:
@@ -185,3 +303,10 @@ async def ensure_zaoan_wanan_table() -> None:
     if _TABLE_READY:
         return
     await ZaoanWananRecord.ensure_table()
+
+
+async def ensure_iwara_state_table() -> None:
+    """热加载后首次访问 Iwara 状态表前的兜底建表入口。"""
+    if _IWARA_TABLE_READY:
+        return
+    await IwaraBloggerState.ensure_table()
